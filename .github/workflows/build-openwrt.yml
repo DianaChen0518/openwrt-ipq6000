@@ -1,0 +1,115 @@
+#
+# 经过你定制的 OpenWrt 编译配置文件
+#
+name: Build Custom OpenWrt for ZN-M2
+
+on:
+  workflow_dispatch: # 允许你手动点击 "Run workflow" 按钮来触发编译
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt.git
+  REPO_BRANCH: main # 你可以改成更稳定的版本, 例如 openwrt-23.05
+  CONFIG_FILE: .config # 配置文件名
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout # 检出你的仓库代码 (为了访问 patches 目录)
+      uses: actions/checkout@v4
+
+    - name: 安装编译环境依赖
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+        gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
+        file wget
+
+    - name: 克隆 OpenWrt 源码
+      run: |
+        git clone --depth 1 -b $REPO_BRANCH $REPO_URL openwrt
+        cd openwrt
+        # 使用国内镜像源加速 Feeds 下载
+        # sed -i 's/git.openwrt.org/github.com/g' feeds.conf.default
+        # echo "src-git-full packages https://git.openwrt.org/feed/packages.git;^65e3392" >> feeds.conf.default
+        # echo "src-git-full luci https://git.openwrt.org/project/luci.git;^a67235b" >> feeds.conf.default
+        # echo "src-git-full routing https://git.openwrt.org/feed/routing.git;^2c63251" >> feeds.conf.default
+        # echo "src-git-full telephony https://git.openwrt.org/feed/telephony.git;^8479958" >> feeds.conf.default
+
+    - name: 更新 Feeds 并应用你的补丁
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        # 关键步骤: 将你仓库中的 patches 目录复制到 OpenWrt 源码中
+        cp -r ../patches .
+
+    - name: 生成你的定制 .config 文件
+      run: |
+        cd openwrt
+        # 删除旧的 .config
+        rm -f .config
+        # 写入你指定的配置
+        cat <<EOF > .config
+        # --- 1. 设备型号设置 ---
+        # 注意：这里根据你最初的要求，选择了 ZN-M2。
+        # 如果你确实需要小米 AX1800 的固件，请将下一行替换为 # CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_xiaomi_ax1800=y
+        CONFIG_TARGET_ipq60xx_generic_DEVICE_cmcc_zn-m2=y
+        CONFIG_TARGET_ipq60xx_generic=y
+
+        # --- 2. 软件包选择 ---
+        # --- 基础功能与语言 ---
+        CONFIG_PACKAGE_luci=y
+        CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+        CONFIG_PACKAGE_luci-theme-design=y
+
+        # --- 网络核心服务 ---
+        CONFIG_PACKAGE_luci-app-gecoosac=y
+        CONFIG_PACKAGE_luci-app-ddns-go=y
+        CONFIG_PACKAGE_luci-app-sqm=y
+        CONFIG_PACKAGE_luci-proto-wireguard=y
+        CONFIG_PACKAGE_wireguard-tools=y
+        CONFIG_PACKAGE_luci-app-upnp=y
+
+        # --- 科学上网与广告过滤 ---
+        CONFIG_PACKAGE_luci-app-adguardhome=y
+        CONFIG_PACKAGE_luci-app-openclash=y
+        CONFIG_PACKAGE_luci-app-unblockneteasemusic=y
+
+        # --- 容器与虚拟化 ---
+        CONFIG_PACKAGE_luci-app-dockerman=y
+
+        # --- 系统工具与监控 ---
+        CONFIG_PACKAGE_luci-app-ttyd=y
+        CONFIG_PACKAGE_luci-app-wrtbwmon=y
+        CONFIG_PACKAGE_luci-app-nlbwmon=y
+        CONFIG_PACKAGE_luci-app-wol=y
+        CONFIG_PACKAGE_htop=y
+        CONFIG_PACKAGE_nano=y
+
+        # --- 智能家居 ---
+        CONFIG_PACKAGE_luci-app-mosquitto=y
+        EOF
+
+        make defconfig
+
+    - name: 下载源码包 (国内服务器可能较慢)
+      run: |
+        cd openwrt
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: 开始编译固件
+      run: |
+        cd openwrt
+        echo -e "$(nproc) thread build."
+        make -j$(nproc) V=s
+
+    - name: 整理并上传固件
+      uses: actions/upload-artifact@v4
+      with:
+        name: OpenWrt-ZN-M2-firmware-Custom
+        path: openwrt/bin/targets/
